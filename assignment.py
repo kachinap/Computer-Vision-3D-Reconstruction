@@ -5,7 +5,7 @@ import cv2
 import os
 
 from calibration import extract_frames, get_manual_corners, interpolate_with_homography, determine_grid_size, calibrate_camera, inner_objp, reorder_corners, square_size
-from background_subtraction import build_background_model_mog2, get_foreground_mask
+from background_subtraction import get_foreground_mask, build_background_model_average
 
 block_size = 1.0
 
@@ -246,26 +246,6 @@ def generate_grid(width, depth):
 
 
 def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
-    """
-    Silhouette-based voxel carving in mm with multi-camera voting, then conversion to the 
-    same coordinate system as get_cam_positions.
-    
-    Steps:
-      1) Define an ROI in mm around the person (the "horse mask" subject).
-      2) Generate a voxel grid in mm.
-      3) For each camera (cam1, cam2, cam3, cam4):
-             - Load calibration data.
-             - Build background model and grab one frame.
-             - Compute the foreground mask.
-             - Project voxel centers onto the 2D image and increment a vote if the projection falls on foreground.
-      4) Select voxels with votes >= threshold.
-      5) (Optional) For debugging, display the projection from cam1.
-      6) Convert the active voxel coordinates (mm) to viewer coordinates:
-             - Multiply by 0.01 (mm → cm)
-             - Flip Y and Z axes as in get_cam_positions.
-             - Add a manual vertical offset if needed.
-      7) Return the transformed positions and colors.
-    """
     # --- ROI in mm (adjust to your scene) ---
     # Example: Person is roughly between z = -1400 mm (head) and z = -500 mm (seat) etc.
     roi_origin = np.array([-500, -900, -1400], dtype=np.float32)
@@ -303,7 +283,7 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
         
         # --- Build background model ---
         bg_video_path = os.path.join(data_path, cam, "background.avi")
-        bg_model = build_background_model_mog2(bg_video_path, num_frames=30)
+        bg_model = build_background_model_average(bg_video_path, num_frames=30)
         if bg_model is None:
             print(f"[VoxelCarving] Could not build BG model for {cam}")
             continue
@@ -318,7 +298,7 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
             continue
         
         # --- Compute foreground mask ---
-        fg_mask = get_foreground_mask(frame, bg_model, fixed_thresh=(30, 30, 30), min_blob_area=500)
+        fg_mask = get_foreground_mask(frame, bg_model, min_blob_area=500)
         h_img, w_img = fg_mask.shape
         
         # --- Project voxel centers (in mm) onto the 2D image ---
@@ -341,43 +321,6 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
     active_mask = votes >= vote_threshold
     active_voxels_mm = voxels_mm[active_mask]
     print(f"[VoxelCarving] Active voxels after voting: {active_voxels_mm.shape[0]} of {N}")
-    
-    # --- (Optional) Debug Overlay for cam1 ---
-    # We'll display the voxel projections for cam1 only for visualization.
-    # cam_debug = "cam1"
-    # config_path = os.path.join(data_path, cam_debug, "config.xml")
-    # fs = cv2.FileStorage(config_path, cv2.FILE_STORAGE_READ)
-    # if fs.isOpened():
-    #     cameraMatrix = fs.getNode("CameraMatrix").mat()
-    #     distCoeffs = fs.getNode("DistortionCoeffs").mat()
-    #     rvec = fs.getNode("RotationVector").mat()
-    #     tvec = fs.getNode("TranslationVector").mat()
-    #     fs.release()
-    #     video_path = os.path.join(data_path, cam_debug, "video.avi")
-    #     cap = cv2.VideoCapture(video_path)
-    #     ret, frame = cap.read()
-    #     cap.release()
-    #     bg_video_path = os.path.join(data_path, cam_debug, "background.avi")
-    #     bg_model = build_background_model_mog2(bg_video_path, num_frames=30)
-    #     fg_mask = get_foreground_mask(frame, bg_model, fixed_thresh=(30, 30, 30), min_blob_area=500)
-    #     vis_img = cv2.cvtColor(fg_mask, cv2.COLOR_GRAY2BGR)
-    #     # Sample a subset of active voxels for overlay
-    #     if active_voxels_mm.shape[0] > 0:
-    #         sample_rate = max(1, active_voxels_mm.shape[0] // 200)
-    #         sample_voxels = active_voxels_mm[::sample_rate]
-    #         sample_proj, _ = cv2.projectPoints(sample_voxels.astype(np.float32), rvec, tvec, cameraMatrix, distCoeffs)
-    #         sample_proj = sample_proj.reshape(-1, 2).astype(int)
-    #         for (x, y) in sample_proj:
-    #             cv2.circle(vis_img, (x, y), 2, (0, 0, 255), -1)
-    #     cv2.imshow("Cam1 Debug: Voxel Projections", vis_img)
-    #     cv2.waitKey(0)
-    #     cv2.destroyWindow("Cam1 Debug: Voxel Projections")
-    
-    # --- Convert active voxel positions to viewer coordinates ---
-    # The conversion used in get_cam_positions is:
-    #   Xviewer = Xmm * 0.01
-    #   Yviewer = -Zmm * 0.01
-    #   Zviewer = Ymm * 0.01
     # Optionally, add a manual offset in Y if needed.
     positions_viewer = []
     scale_factor = 0.01  # mm → cm

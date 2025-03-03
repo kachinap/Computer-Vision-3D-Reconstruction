@@ -65,7 +65,6 @@ def main():
             print(f"No calibration data for {cam}, skipping.")
     
     # Continue with the rest of the initialization
-    # ------
 
     if not glfw.init():
         print('Failed to initialize GLFW.')
