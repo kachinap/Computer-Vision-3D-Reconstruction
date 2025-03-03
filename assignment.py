@@ -9,14 +9,12 @@ from scipy.spatial import cKDTree
 from calibration import extract_frames, get_manual_corners, interpolate_with_homography, determine_grid_size, calibrate_camera, inner_objp, reorder_corners, square_size
 from background_subtraction import get_foreground_mask, build_background_model_average
 
-block_size = 1.0
-
-# --- Calibration Section ---
 import os
 from calibration import extract_frames, get_manual_corners, interpolate_with_homography, calibrate_camera, inner_objp, square_size
 
-# Function that processes each camera folder's intrinsics.avi using manual corner selection and interpolation,
-# then performs calibration to compute intrinsics and extrinsics
+block_size = 1.0
+
+# Function that processes each camera folder's intrinsics.avi using manual corner selection and interpolation, then performs calibration to compute intrinsics and extrinsics
 def calibrate_cameras(data_path, camera_folders, num_frames=25):
     cam_params = {}
     for cam in camera_folders:
@@ -86,7 +84,7 @@ def calibrate_extrinsics_for_camera(cam_folder, intrinsics, calib_video="checker
     print(f"[{cam_folder}] Extrinsics reprojection error: {error:.4f}")
     print(f"[{cam_folder}] rvec:\n{rvec}\n tvec:\n{tvec}")
 
-    # Visualize by projecting a 3D axis.
+    # Visualize by projecting a 3D axis
     axis_3D = np.float32([
         [3 * square_size, 0, 0],
         [0, 3 * square_size, 0],
@@ -246,9 +244,8 @@ def generate_grid(width, depth):
             colors.append([1.0, 1.0, 1.0] if (x+z) % 2 == 0 else [1, 1, 1])
     return data, colors
 
-# Function that converts the list of active voxel positions (in mm) to a 3D occupancy grid, performs connected component labeling, and removes clusters smaller than min_voxel_count
+# Function that converts active voxel positions to a 3D occupancy grid and removes small clusters
 def remove_small_clusters(active_voxels_mm, roi_origin, voxel_size, roi_extent, min_voxel_count=50):
-    # Define grid shape based on the ROI
     xs = np.arange(roi_origin[0], roi_origin[0] + roi_extent[0], voxel_size, dtype=np.float32)
     ys = np.arange(roi_origin[1], roi_origin[1] + roi_extent[1], voxel_size, dtype=np.float32)
     zs = np.arange(roi_origin[2], roi_origin[2] + roi_extent[2], voxel_size, dtype=np.float32)
@@ -256,9 +253,6 @@ def remove_small_clusters(active_voxels_mm, roi_origin, voxel_size, roi_extent, 
     
     occupancy = np.zeros(grid_shape, dtype=np.uint8)
     
-    # For each active voxel, compute its index in the occupancy grid.
-    # Since the voxel positions come from the grid, the indices can be computed by:
-    # index = round((position - roi_origin) / voxel_size)
     indices = np.rint((active_voxels_mm - roi_origin) / voxel_size).astype(int)
     for idx in indices:
         i, j, k = idx
@@ -267,7 +261,7 @@ def remove_small_clusters(active_voxels_mm, roi_origin, voxel_size, roi_extent, 
 
     # Label connected components in the 3D occupancy grid
     labeled, num_features = label(occupancy)
-    # Build a new occupancy grid that keeps only large clusters.
+    # Build a new occupancy grid that keeps only large clusters
     cleaned = np.zeros_like(occupancy)
     for comp in range(1, num_features + 1):
         comp_size = np.sum(labeled == comp)
@@ -281,11 +275,9 @@ def remove_small_clusters(active_voxels_mm, roi_origin, voxel_size, roi_extent, 
     return cleaned_voxels
 
 def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
-    # --- ROI in mm (adjust to your scene) ---
-    # Example: Person is roughly between z = -1400 mm (head) and z = -500 mm (seat) etc.
     roi_origin = np.array([-400, -800, -1400], dtype=np.float32)
     roi_extent = np.array([1000, 1400, 2000], dtype=np.float32)
-    voxel_size = 10.0  # mm per voxel (adjust for resolution vs. performance)
+    voxel_size = 10.0
     
     # Build the voxel grid in mm
     xs = np.arange(roi_origin[0], roi_origin[0] + roi_extent[0], voxel_size, dtype=np.float32)
@@ -304,7 +296,6 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
     
     # Loop over all cameras
     for cam in camera_folders:
-        # --- Load calibration data for current camera ---
         config_path = os.path.join(data_path, cam, "config.xml")
         fs = cv2.FileStorage(config_path, cv2.FILE_STORAGE_READ)
         if not fs.isOpened():
@@ -316,14 +307,12 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
         tvec = fs.getNode("TranslationVector").mat()
         fs.release()
         
-        # --- Build background model ---
         bg_video_path = os.path.join(data_path, cam, "background.avi")
         bg_model = build_background_model_average(bg_video_path, num_frames=30)
         if bg_model is None:
             print(f"[VoxelCarving] Could not build BG model for {cam}")
             continue
         
-        # --- Grab one frame from the video ---
         video_path = os.path.join(data_path, cam, "video.avi")
         cap = cv2.VideoCapture(video_path)
         ret, frame = cap.read()
@@ -332,16 +321,13 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
             print(f"[VoxelCarving] Could not read frame from {video_path}")
             continue
         
-        # --- Compute foreground mask ---
         fg_mask = get_foreground_mask(frame, bg_model, min_blob_area=500)
         h_img, w_img = fg_mask.shape
         
-        # --- Project voxel centers (in mm) onto the 2D image ---
         projected, _ = cv2.projectPoints(voxels_mm.astype(np.float32), rvec, tvec, cameraMatrix, distCoeffs)
         projected = projected.reshape(-1, 2)  # shape: (N, 2)
         proj_int = np.rint(projected).astype(int)
         
-        # --- For valid projections, add a vote if the pixel is foreground ---
         valid = (proj_int[:, 0] >= 0) & (proj_int[:, 0] < w_img) & (proj_int[:, 1] >= 0) & (proj_int[:, 1] < h_img)
         valid_indices = np.where(valid)[0]
         for idx in valid_indices:
@@ -351,25 +337,22 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
                 
         print(f"[VoxelCarving] Processed {cam}")
     
-    # Determine which voxels have enough votes (e.g., at least 3 of 4 cameras)
     vote_threshold = 4
     active_mask = votes >= vote_threshold
     active_voxels_mm = voxels_mm[active_mask]
     print(f"[VoxelCarving] Active voxels after voting: {active_voxels_mm.shape[0]} of {N}")
-     # --- Remove small noisy clusters using connected component analysis ---
     active_voxels_mm = remove_small_clusters(active_voxels_mm, roi_origin, voxel_size, roi_extent, min_voxel_count=50)
     print(f"[VoxelCarving] Active voxels after noise removal: {active_voxels_mm.shape[0]}")
     
-    # --- Optional: Subsample (step size) the active voxels for a sparser point cloud ---
-    step_size = 1  # Use every 2nd voxel; increase to make it sparser.
+    step_size = 1
     active_voxels_mm = active_voxels_mm[::step_size]
     print(f"[VoxelCarving] Active voxels after subsampling: {active_voxels_mm.shape[0]}")
     
-    
-    # --- Coloring: Determine Voxel Colors with Occlusion Reasoning ---
     voxel_colors = np.zeros((active_voxels_mm.shape[0], 3), dtype=np.float32)
     visibility_counts = np.zeros((active_voxels_mm.shape[0],), dtype=np.int32)
 
+    # CHOICE 3: Coloring the voxel model
+    # This section assigns color to each active voxel based on camera observations
     for cam in camera_folders:
         config_path = os.path.join(data_path, cam, "config.xml")
         fs = cv2.FileStorage(config_path, cv2.FILE_STORAGE_READ)
@@ -397,10 +380,9 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
         proj_int = np.rint(projected).astype(int)
         
         R, _ = cv2.Rodrigues(rvec)
-        X_cam = (R @ active_voxels_mm.T + tvec).T  # shape: (num_active, 3)
-        depths = X_cam[:, 2]  # Depth values in mm
+        X_cam = (R @ active_voxels_mm.T + tvec).T
+        depths = X_cam[:, 2]
         
-        # Build a simple depth map (z-buffer) for this camera:
         depth_map = np.full((h_img, w_img), np.inf, dtype=np.float32)
         for i, (p, d) in enumerate(zip(proj_int, depths)):
             x, y = p
@@ -408,7 +390,7 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
                 if d < depth_map[y, x]:
                     depth_map[y, x] = d
         
-        tolerance = 5.0  # mm tolerance for occlusion
+        tolerance = 5.0
         for i, (p, d) in enumerate(zip(proj_int, depths)):
             x, y = p
             if 0 <= x < w_img and 0 <= y < h_img:
@@ -418,7 +400,7 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
                     visibility_counts[i] += 1
         print(f"[Coloring] Processed {cam}")
 
-    # For voxels that did not receive any color sample, fill in using neighboring voxels.
+    # For voxels that did not receive any color sample, fill in using neighboring voxels
     colored_idx = np.where(visibility_counts > 0)[0]
     if colored_idx.size > 0:
         colored_positions = active_voxels_mm[colored_idx]
@@ -428,21 +410,19 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
         uncolored_idx = np.where(visibility_counts == 0)[0]
         for i in uncolored_idx:
             pos = active_voxels_mm[i]
-            # Try to find neighbors within a radius (e.g., 2*voxel_size)
             neighbors = tree.query_ball_point(pos, r=2 * voxel_size)
             if len(neighbors) > 0:
                 avg_color = np.mean(colored_colors[neighbors], axis=0)
                 voxel_colors[i] = avg_color
                 visibility_counts[i] = 1
             else:
-                # If no neighbor within the radius, use the nearest neighbor.
                 distance, neighbor_index = tree.query(pos)
                 voxel_colors[i] = colored_colors[neighbor_index]
                 visibility_counts[i] = 1
     else:
         voxel_colors[:] = 255
 
-    # Average the colors for each voxel (for those with direct samples, this divides by the count)
+    # Averaging the colors for each voxel (for those with direct samples, this divides by the count)
     for i in range(voxel_colors.shape[0]):
         if visibility_counts[i] > 0:
             voxel_colors[i] /= visibility_counts[i]
@@ -451,10 +431,9 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
 
     # Normalize colors to [0,1]
     voxel_colors /= 255.0
-    # Optionally, add a manual offset in Y if needed.
     positions_viewer = []
     scale_factor = 0.01  # mm → cm
-    viewer_y_offset = 2  # Adjust this offset (in cm) to align the model with the floor
+    viewer_y_offset = 2
 
     for (Xmm, Ymm, Zmm) in active_voxels_mm:
         Xv = Xmm * scale_factor
@@ -465,12 +444,8 @@ def set_voxel_positions(dummy_width, dummy_height, dummy_depth):
     colors = voxel_colors.tolist()
     return positions_viewer, colors
 
-
-
-
-
+# Function that returns camera positions in world coordinates
 def get_cam_positions():
-    # Returns the camera positions in world coordinates based on calibration data.
     data_path = "data"
     camera_folders = ["cam1", "cam2", "cam3", "cam4"]
     cam_positions = []
@@ -496,14 +471,7 @@ def get_cam_positions():
             # Calculate camera position in world coordinates
             camera_position = -np.matmul(R.T, tvec).flatten()
             
-            # Scale down the positions to fit in the visualization space
-            # Divide by 100 to convert from centimeters to meters or to scale appropriately
-            scale_factor = 0.01  # 1/100
-            
-            # OpenCV to OpenGL coordinate conversion:
-            # OpenCV: Y down, Z forward
-            # OpenGL: Y up, Z backward
-            # Need to flip Y and Z axes
+            scale_factor = 0.0
             scaled_position = [
                 camera_position[0] * scale_factor,
                 -camera_position[2] * scale_factor,  # Flip Y axis
@@ -527,8 +495,8 @@ def get_cam_positions():
     
     return cam_positions, cam_colors
 
+# Function that returns the camera rotation matrices in OpenGL format
 def get_cam_rotation_matrices():
-    # Returns the camera rotation matrices in world coordinates based on calibration data.
     data_path = "data"
     camera_folders = ["cam1", "cam2", "cam3", "cam4"]
     cam_rotations = []
@@ -542,8 +510,6 @@ def get_cam_rotation_matrices():
             fs.release()
             rot_mat, _ = cv2.Rodrigues(rvec)
             
-            # Convert OpenCV rotation matrix to OpenGL rotation matrix
-            # Need to flip Y and Z axes
             flip_mat = np.array([
                 [1, 0, 0],
                 [0, 1, 0],  # Flip Y axis

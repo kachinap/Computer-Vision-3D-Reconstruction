@@ -186,6 +186,7 @@ def calibrate_camera(object_points, image_points, img_size):
     )
     return cameraMatrix, distCoeffs, ret, rvecs, tvecs
 
+# Function that reorders the selected corners if the board is not placed horizontally (10x8)
 def reorder_corners(corners):
     pts = np.array(corners)
     sorted_by_y = pts[np.argsort(pts[:, 1])]
